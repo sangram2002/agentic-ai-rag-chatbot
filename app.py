@@ -458,19 +458,35 @@ def main():
     """
     
     # Page configuration
+    # 1. Page configuration
     st.set_page_config(
         page_title="Agentic AI RAG Chatbot (FREE)",
         page_icon="🤖",
         layout="wide"
     )
-    
-    # Title and description
+
+
     st.title("🤖 Agentic AI RAG Chatbot")
     st.markdown("""
     Ask questions about **Agentic AI** based on the official eBook.  
-    **100% FREE** - Uses open-source models, no API keys required! 🎉
     """)
-    
+
+    # This ensures the database is loaded BEFORE anything else runs
+    if "vector_store" not in st.session_state:
+        with st.spinner("🚀 Initializing FREE models and processing eBook... This may take 1-2 minutes on first run."):
+            try:
+                # Create and store the FAISS database in session memory
+                st.session_state.vector_store = create_vector_store()
+                
+                # Create and store the LangGraph workflow
+                st.session_state.rag_graph = create_rag_graph()
+                
+                st.success("✅ System Ready!")
+                st.rerun() # Refresh once to ensure state is registered
+            except Exception as e:
+                st.error(f"❌ Initialization failed: {e}")
+                st.stop()
+
     # Sidebar with information and sample queries
     with st.sidebar:
         st.header("ℹ️ About")
