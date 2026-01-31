@@ -1,0 +1,20 @@
+# Core dependencies for RAG chatbot
+streamlit==1.31.0
+
+langgraph==0.0.20
+langchain>=0.1.9,<0.2
+langchain-community>=0.0.21,<0.1
+langchain-openai>=0.0.5
+
+# Vector store and embeddings
+faiss-cpu
+
+# PDF processing
+pypdf==4.0.1
+
+# OpenAI
+openai==1.12.0
+
+# Utilities
+python-dotenv==1.0.1
+typing-extensions==4.9.0
