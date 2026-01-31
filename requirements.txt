@@ -1,0 +1,21 @@
+# UI
+streamlit==1.31.0
+
+# LangChain + LangGraph (stable combo)
+langgraph==0.0.20
+langchain==0.1.20
+langchain-community==0.0.38
+langchain-openai==0.1.7
+
+# Vector store
+faiss-cpu==1.7.4
+
+# PDF ingestion
+pypdf==4.0.1
+
+# OpenAI SDK (REQUIRED for langchain-openai)
+openai==1.35.0
+
+# Utilities
+python-dotenv==1.0.1
+typing-extensions==4.9.0
