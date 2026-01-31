@@ -1,0 +1,11 @@
+streamlit==1.31.0
+langgraph==0.0.39
+langchain==0.1.20
+langchain-community==0.0.38
+langchain-openai==0.1.1
+openai==1.55.3
+httpx==0.27.2       # Add this to fix the 'hidden' dependency
+tiktoken
+faiss-cpu==1.7.4
+pypdf==4.0.1
+python-dotenv==1.0.1
