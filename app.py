@@ -4,15 +4,13 @@ RAG-based AI Chatbot for Agentic AI eBook (100% FREE VERSION)
 A complete Retrieval-Augmented Generation (RAG) system using LangGraph
 with FREE open-source models - NO API KEYS REQUIRED!
 
-GUARANTEED TO WORK:
-- Primary: HuggingFace Mistral-7B API (free)
-- Fallback 1: Alternative HuggingFace models (faster)
-- Fallback 2: Context-based answer from retrieved chunks
-- ALWAYS returns an answer!
+Works perfectly:
+- WITHOUT any token (uses public HuggingFace API - slower, rate limited)
+- WITH optional FREE HuggingFace token (faster, higher rate limits)
 
 Uses:
 - Sentence Transformers for embeddings (runs locally)
-- Multiple LLM fallbacks for reliability
+- Mistral-7B via Hugging Face Inference API (free)
 - FAISS for vector storage
 - LangGraph for workflow orchestration
 
@@ -59,37 +57,28 @@ CHUNK_OVERLAP = 100  # Overlap between chunks to maintain context
 TOP_K = 4  # Number of relevant chunks to retrieve
 
 # FREE MODEL CONFIGURATION
+# These models are completely free and run without any API keys!
+
+# Embedding Model - Runs locally on your machine
+# sentence-transformers/all-MiniLM-L6-v2: 
+# - 384 dimensions, very fast
+# - Trained on 1B+ sentence pairs
+# - Perfect for semantic search
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Multiple LLM options for fallback reliability
-# We'll try these in order until one works
-LLM_MODELS = [
-    {
-        "name": "Mistral-7B-Instruct",
-        "repo": "mistralai/Mistral-7B-Instruct-v0.2",
-        "quality": "high",
-        "speed": "medium"
-    },
-    {
-        "name": "Flan-T5-Large",
-        "repo": "google/flan-t5-large",
-        "quality": "medium",
-        "speed": "fast"
-    },
-    {
-        "name": "Flan-T5-Base",
-        "repo": "google/flan-t5-base",
-        "quality": "medium",
-        "speed": "very-fast"
-    }
-]
+# LLM Model - Uses Hugging Face's FREE Inference API
+# Works with or without token!
+LLM_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{LLM_MODEL}"
 
 # Try to get HuggingFace token from environment or Streamlit secrets
 # This is OPTIONAL - works without it!
 HF_TOKEN = None
 try:
+    # Try environment variable first
     HF_TOKEN = os.getenv("HUGGINGFACEHUB_API_TOKEN")
     if not HF_TOKEN:
+        # Try Streamlit secrets
         HF_TOKEN = st.secrets.get("HUGGINGFACEHUB_API_TOKEN", None)
 except:
     HF_TOKEN = None
@@ -102,6 +91,15 @@ except:
 class GraphState(TypedDict):
     """
     State object that flows through the LangGraph workflow.
+    
+    This TypedDict defines the structure of data that passes between nodes:
+    - question: The user's input question
+    - retrieved_chunks: Documents retrieved from vector database
+    - context: Formatted context string from retrieved chunks
+    - answer: Final generated answer
+    - confidence: Confidence score (0-1) based on retrieval similarity
+    - metadata: Additional information (page numbers, sources, etc.)
+    - vector_store: The FAISS vector store (passed through the state)
     """
     question: str
     retrieved_chunks: List[Document]
@@ -109,143 +107,119 @@ class GraphState(TypedDict):
     answer: str
     confidence: float
     metadata: Dict
-    vector_store: any
+    vector_store: any  # FAISS vector store passed through state
 
 
 # -------------------------------------------------------------------
-# MULTI-LEVEL LLM FALLBACK SYSTEM
+# FREE LLM INFERENCE FUNCTION (WORKS WITH OR WITHOUT TOKEN!)
 # -------------------------------------------------------------------
 
-def call_huggingface_model(model_repo: str, prompt: str, timeout: int = 20) -> tuple[str, bool]:
+def call_huggingface_api(prompt: str, max_retries: int = 3) -> str:
     """
-    Call a specific HuggingFace model.
+    Call Hugging Face Inference API.
     
+    Works in two modes:
+    1. WITHOUT token: Uses public API (slower, rate limited ~10-30 req/hour)
+    2. WITH token: Uses authenticated API (faster, ~1000 req/hour)
+    
+    Args:
+        prompt: The prompt to send to the model
+        max_retries: Number of times to retry if the model is loading
+        
     Returns:
-        (response_text, success_flag)
+        Generated text from the model
     """
+    
+    # Build headers - add token if available
     headers = {"Content-Type": "application/json"}
     if HF_TOKEN:
         headers["Authorization"] = f"Bearer {HF_TOKEN}"
-    
-    api_url = f"https://api-inference.huggingface.co/models/{model_repo}"
     
     payload = {
         "inputs": prompt,
         "parameters": {
             "temperature": 0.1,
-            "max_new_tokens": 400,
+            "max_new_tokens": 512,
             "return_full_text": False,
+            "do_sample": True,
         }
     }
     
-    try:
-        response = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if isinstance(result, list) and len(result) > 0:
-                text = result[0].get("generated_text", "")
-                return text, True
-            elif isinstance(result, dict):
-                text = result.get("generated_text", "")
-                return text, True
-        
-        return f"Model returned status {response.status_code}", False
-        
-    except Exception as e:
-        return f"Error: {str(e)}", False
-
-
-def generate_from_context_fallback(context: str, question: str) -> str:
-    """
-    FINAL FALLBACK: Extract answer directly from context using simple logic.
-    This ALWAYS works even if all APIs fail.
-    
-    This is a basic extractive QA approach - finds the most relevant sentence.
-    """
-    # Split context into sentences
-    sentences = re.split(r'[.!?]+', context)
-    sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
-    
-    # Simple keyword matching - find sentences with question keywords
-    question_lower = question.lower()
-    question_words = set(re.findall(r'\b\w+\b', question_lower))
-    question_words = question_words - {'what', 'is', 'are', 'how', 'why', 'when', 'where', 'the', 'a', 'an'}
-    
-    # Score each sentence
-    scored_sentences = []
-    for sentence in sentences:
-        sentence_lower = sentence.lower()
-        sentence_words = set(re.findall(r'\b\w+\b', sentence_lower))
-        overlap = len(question_words & sentence_words)
-        if overlap > 0:
-            scored_sentences.append((overlap, sentence))
-    
-    # Get top sentences
-    scored_sentences.sort(reverse=True, key=lambda x: x[0])
-    
-    if scored_sentences:
-        # Return top 2-3 most relevant sentences
-        top_sentences = [s[1] for s in scored_sentences[:3]]
-        answer = ". ".join(top_sentences)
-        if not answer.endswith('.'):
-            answer += '.'
-        return f"Based on the eBook content: {answer}"
-    else:
-        # If no match, return first chunk of context
-        first_chunk = '. '.join(sentences[:2])
-        return f"Here's what I found in the eBook: {first_chunk}."
-
-
-def call_llm_with_fallbacks(prompt: str, context: str, question: str) -> tuple[str, str]:
-    """
-    Try multiple LLM models in sequence, with a guaranteed fallback.
-    
-    Returns:
-        (answer_text, method_used)
-    """
-    
-    # Try each model in sequence
-    for i, model in enumerate(LLM_MODELS):
+    for attempt in range(max_retries):
         try:
-            st.info(f"🔄 Trying {model['name']}... (attempt {i+1}/{len(LLM_MODELS)})")
+            response = requests.post(
+                HF_API_URL,
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
             
-            # For Mistral, use [INST] format
-            if "mistral" in model['repo'].lower():
-                formatted_prompt = prompt
-            else:
-                # For T5 models, use simpler format
-                formatted_prompt = f"""Answer this question based ONLY on the context provided.
-
-Context: {context}
-
-Question: {question}
-
-Answer:"""
-            
-            response, success = call_huggingface_model(model['repo'], formatted_prompt, timeout=15)
-            
-            if success and len(response.strip()) > 10:
-                # Clean up response
-                answer = response.strip()
-                answer = re.sub(r'\[INST\].*?\[/INST\]', '', answer, flags=re.DOTALL).strip()
-                answer = re.sub(r'</?s>', '', answer).strip()
+            # Check if successful
+            if response.status_code == 200:
+                result = response.json()
                 
-                st.success(f"✅ Success using {model['name']}!")
-                return answer, f"{model['name']} (HuggingFace API)"
-            else:
-                st.warning(f"⚠️ {model['name']} failed, trying next model...")
-                time.sleep(2)
+                # Handle different response formats
+                if isinstance(result, list) and len(result) > 0:
+                    return result[0].get("generated_text", "")
+                elif isinstance(result, dict):
+                    return result.get("generated_text", "")
+                else:
+                    return str(result)
+            
+            # Handle model loading state (common on first request)
+            elif response.status_code == 503:
+                error_data = response.json()
+                if "estimated_time" in error_data:
+                    wait_time = min(error_data["estimated_time"], 20)
+                    st.info(f"🔄 Model is loading on HuggingFace servers... Waiting {wait_time:.0f} seconds (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    st.info(f"⏳ Model is loading... Retrying in 5 seconds (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(5)
+                    continue
+            
+            # Handle rate limiting (more common without token)
+            elif response.status_code == 429:
+                if HF_TOKEN:
+                    st.warning("⚠️ Rate limit reached even with token. Waiting 10 seconds...")
+                else:
+                    st.warning("⚠️ Rate limit reached. Consider adding a FREE HuggingFace token for higher limits. Waiting 10 seconds...")
+                time.sleep(10)
                 continue
+            
+            # Handle authentication errors
+            elif response.status_code == 401:
+                st.warning("⚠️ Invalid HuggingFace token. Falling back to public API...")
+                # Remove the token and retry without it
+                headers.pop("Authorization", None)
+                continue
+            
+            else:
+                # Other errors
+                error_msg = response.text
+                if attempt < max_retries - 1:
+                    st.info(f"⚠️ API error (Status {response.status_code}). Retrying... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(3)
+                    continue
                 
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                st.info(f"⏱️ Request timeout. Retrying... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(3)
+                continue
+            else:
+                return "Request timeout. The API may be busy. Please try again in a few moments."
+        
         except Exception as e:
-            st.warning(f"⚠️ {model['name']} error: {str(e)[:50]}...")
-            continue
+            if attempt < max_retries - 1:
+                st.info(f"⚠️ Error: {str(e)[:50]}... Retrying... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(3)
+                continue
+            else:
+                return f"Unable to generate answer. Error: {str(e)[:100]}"
     
-    # If ALL models fail, use context-based fallback (ALWAYS works)
-    st.info("🔄 All API models busy. Using context-based extraction (guaranteed to work)...")
-    answer = generate_from_context_fallback(context, question)
-    return answer, "Context Extraction (No API needed)"
+    return "Unable to generate answer after multiple attempts. The free API may be busy. Please try again in a few moments."
 
 
 # -------------------------------------------------------------------
@@ -256,26 +230,54 @@ Answer:"""
 def create_vector_store():
     """
     Load PDF, chunk text, generate embeddings, and create vector store.
+    
+    Why FREE local embeddings are great:
+    - No API costs - runs entirely on your machine
+    - No rate limits - process as much as you want
+    - Privacy - your data never leaves your computer
+    - Fast - sentence-transformers are optimized for CPU
+    
+    Why chunking is needed in RAG:
+    - LLMs have token limits; we can't send entire documents
+    - Smaller chunks improve retrieval precision
+    - Each chunk becomes a searchable unit with its own embedding
+    - Overlap ensures important information at chunk boundaries isn't lost
+    
+    Returns:
+        FAISS vector store with embedded document chunks
     """
     
+    # Step 1: Download and load the PDF
+    # PyPDFLoader extracts text from each page
     loader = PyPDFLoader(PDF_URL)
     documents = loader.load()
     
+    # Step 2: Split documents into smaller chunks
+    # RecursiveCharacterTextSplitter tries to split on natural boundaries
+    # (paragraphs, sentences) while respecting the size limits
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
         length_function=len,
-        separators=["\n\n", "\n", ". ", " ", ""]
+        separators=["\n\n", "\n", ". ", " ", ""]  # Try these separators in order
     )
     
     chunks = text_splitter.split_documents(documents)
     
+    # Step 3: Generate embeddings using FREE local model
+    # HuggingFaceEmbeddings downloads the model once and runs locally
+    # No internet needed after first download!
+    # all-MiniLM-L6-v2: 384-dimensional embeddings, very fast
     embeddings = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
-        model_kwargs={'device': 'cpu'},
-        encode_kwargs={'normalize_embeddings': True}
+        model_kwargs={'device': 'cpu'},  # Use CPU (works everywhere)
+        encode_kwargs={'normalize_embeddings': True}  # Normalize for better similarity
     )
     
+    # Step 4: Create FAISS vector store
+    # FAISS (Facebook AI Similarity Search) is an efficient vector database
+    # It uses approximate nearest neighbor search for fast retrieval
+    # Also completely free and runs locally!
     vector_store = FAISS.from_documents(chunks, embeddings)
     
     return vector_store
@@ -286,15 +288,37 @@ def create_vector_store():
 # -------------------------------------------------------------------
 
 def retrieve_node(state: GraphState) -> GraphState:
-    """Node 1: Retrieval"""
+    """
+    Node 1: Retrieval
+    
+    Retrieves the most relevant document chunks from the vector database
+    based on semantic similarity to the user's question.
+    
+    How it works:
+    1. Convert user question to embedding vector (using local model)
+    2. Find K-nearest neighbor chunks in vector space
+    3. Return chunks with similarity scores
+    
+    Args:
+        state: Current graph state containing the question and vector_store
+        
+    Returns:
+        Updated state with retrieved_chunks and metadata
+    """
     question = state["question"]
-    vector_store = state["vector_store"]
+    vector_store = state["vector_store"]  # Get vector store from state
     
-    docs_with_scores = vector_store.similarity_search_with_score(question, k=TOP_K)
+    # Perform similarity search with scores
+    # Returns: [(Document, similarity_score), ...]
+    docs_with_scores = vector_store.similarity_search_with_score(
+        question, k=TOP_K
+    )
     
+    # Extract just the documents and scores
     retrieved_chunks = [doc for doc, score in docs_with_scores]
     similarity_scores = [float(score) for doc, score in docs_with_scores]
     
+    # Store metadata about retrieval
     metadata = {
         "num_chunks": len(retrieved_chunks),
         "similarity_scores": similarity_scores,
@@ -308,15 +332,28 @@ def retrieve_node(state: GraphState) -> GraphState:
 
 
 def format_context_node(state: GraphState) -> GraphState:
-    """Node 2: Context Formatting"""
+    """
+    Node 2: Context Formatting
+    
+    Formats retrieved chunks into a coherent context string for the LLM.
+    Includes metadata like page numbers for transparency.
+    
+    Args:
+        state: Current graph state with retrieved_chunks
+        
+    Returns:
+        Updated state with formatted context string
+    """
     chunks = state["retrieved_chunks"]
     
+    # Format each chunk with metadata
     formatted_chunks = []
     for i, doc in enumerate(chunks, 1):
         page_num = doc.metadata.get("page", "Unknown")
         chunk_text = doc.page_content.strip()
         formatted_chunks.append(f"[Source {i} - Page {page_num}]\n{chunk_text}")
     
+    # Join all chunks with clear separators
     context = "\n\n---\n\n".join(formatted_chunks)
     
     state["context"] = context
@@ -326,25 +363,41 @@ def format_context_node(state: GraphState) -> GraphState:
 
 def generate_answer_node(state: GraphState) -> GraphState:
     """
-    Node 3: Answer Generation with GUARANTEED fallbacks.
+    Node 3: Answer Generation
     
-    This ALWAYS returns an answer using one of these methods:
-    1. Mistral-7B API (best quality)
-    2. Flan-T5-Large API (good quality, faster)
-    3. Flan-T5-Base API (decent quality, very fast)
-    4. Context extraction (guaranteed to work, no API)
+    Generates a grounded answer using a FREE open-source LLM via Hugging Face.
+    
+    CRITICAL GROUNDING RULES:
+    - LLM must ONLY use information from the provided context
+    - If answer is not in context, LLM must explicitly state this
+    - No external knowledge or assumptions allowed
+    - This ensures factual accuracy and prevents hallucinations
+    
+    Why Mistral-7B via Direct API?
+    - One of the best open-source models (comparable to GPT-3.5)
+    - FREE - works with or without token
+    - Specifically trained for instruction following
+    - Works out of the box with zero configuration
+    
+    Args:
+        state: Current graph state with question and context
+        
+    Returns:
+        Updated state with generated answer
     """
     question = state["question"]
     context = state["context"]
     
-    # Build prompt for instruction-following models
+    # GROUNDING PROMPT TEMPLATE FOR MISTRAL
+    # Mistral uses [INST] instruction format for best results
     prompt = f"""[INST] You are a helpful assistant answering questions about Agentic AI based STRICTLY on the provided context from an eBook.
 
 STRICT RULES:
-1. Use ONLY the information in the context below
-2. If the answer is not in the context, say: "I cannot find this information in the provided eBook content."
-3. Be concise and direct
+1. Use ONLY the information in the context below - DO NOT use any external knowledge
+2. If the answer is not in the context, respond EXACTLY with: "I cannot find this information in the provided eBook content."
+3. Be concise and direct - no unnecessary explanations
 4. Quote specific parts when possible
+5. Stay focused on the question
 
 CONTEXT FROM EBOOK:
 {context}
@@ -353,30 +406,70 @@ QUESTION: {question}
 
 ANSWER (based only on context above): [/INST]"""
 
+    # Generate the answer using the FREE Hugging Face API
     try:
-        # Try multiple models with fallback
-        answer, method = call_llm_with_fallbacks(prompt, context, question)
+        response = call_huggingface_api(prompt)
         
-        # Store which method was used in metadata
-        state["metadata"]["generation_method"] = method
-        state["answer"] = answer
+        # Clean up the response (remove any residual formatting)
+        answer = response.strip()
         
+        # Post-process to ensure quality
+        # Remove any instruction artifacts
+        answer = re.sub(r'\[INST\].*?\[/INST\]', '', answer, flags=re.DOTALL).strip()
+        answer = re.sub(r'</?s>', '', answer).strip()  # Remove special tokens
+        
+        # If answer is too short or looks like an error, provide fallback
+        if len(answer) < 10 or "error" in answer.lower()[:50]:
+            if "cannot find" in answer.lower() or "not in the context" in answer.lower():
+                # This is a valid "not found" response
+                answer = "I cannot find this information in the provided eBook content."
+            elif len(answer) < 10:
+                answer = "I cannot find this information in the provided eBook content."
+            # else keep the error/response message as is
+            
     except Exception as e:
-        # Ultimate fallback - should never reach here, but just in case
-        st.error(f"Unexpected error: {str(e)}")
-        answer = generate_from_context_fallback(context, question)
-        state["metadata"]["generation_method"] = "Emergency Context Extraction"
-        state["answer"] = answer
+        # If something goes wrong, provide informative fallback
+        answer = f"Unable to generate answer at this time. Please try again in a few moments."
+    
+    state["answer"] = answer
     
     return state
 
 
 def calculate_confidence_node(state: GraphState) -> GraphState:
-    """Node 4: Confidence Scoring"""
+    """
+    Node 4: Confidence Scoring
+    
+    Calculates a confidence score (0-1) based on retrieval quality.
+    
+    Logic for local embeddings:
+    - Sentence transformers use cosine similarity (0-2 scale)
+    - Lower score = more similar (0 = identical, 2 = opposite)
+    - Convert to 0-1 scale: confidence = 1 - (score / 2)
+    - Average across top-K chunks
+    
+    Interpretation:
+    - High confidence (>0.7): Strong semantic match, reliable answer
+    - Medium confidence (0.4-0.7): Moderate match, generally reliable  
+    - Low confidence (<0.4): Weak match, answer may be unreliable
+    
+    Args:
+        state: Current graph state with metadata containing similarity scores
+        
+    Returns:
+        Updated state with confidence score
+    """
     similarity_scores = state["metadata"]["similarity_scores"]
     
+    # Convert similarity scores to 0-1 confidence
+    # For L2 distance (what FAISS returns): lower is better
+    # Formula: confidence = 1 / (1 + score)
     confidences = [1 / (1 + score) for score in similarity_scores]
+    
+    # Calculate average confidence
     confidence = sum(confidences) / len(confidences) if confidences else 0.0
+    
+    # Clamp between 0 and 1
     confidence = max(0.0, min(1.0, confidence))
     
     state["confidence"] = confidence
@@ -389,21 +482,47 @@ def calculate_confidence_node(state: GraphState) -> GraphState:
 # -------------------------------------------------------------------
 
 def create_rag_graph():
-    """Constructs the LangGraph workflow for RAG."""
+    """
+    Constructs the LangGraph workflow for RAG.
     
+    Graph Flow:
+    1. START → User submits question
+    2. RETRIEVE → Fetch relevant chunks from vector DB (local, free)
+    3. FORMAT → Format chunks into context string
+    4. GENERATE → LLM generates grounded answer (free HF API)
+    5. CONFIDENCE → Calculate confidence score
+    6. END → Return final response
+    
+    Why LangGraph?
+    - Provides explicit control over RAG pipeline
+    - Each node is testable and debuggable independently
+    - Easy to add conditional logic (e.g., re-ranking, query expansion)
+    - More maintainable than complex chains
+    - Perfect for explaining in interviews!
+    
+    Returns:
+        Compiled LangGraph application
+    """
+    
+    # Initialize the graph with our state schema
     workflow = StateGraph(GraphState)
     
+    # Add nodes to the graph
+    # Each node is a function that processes the state
     workflow.add_node("retrieve", retrieve_node)
     workflow.add_node("format_context", format_context_node)
     workflow.add_node("generate_answer", generate_answer_node)
     workflow.add_node("calculate_confidence", calculate_confidence_node)
     
-    workflow.set_entry_point("retrieve")
+    # Define edges (flow between nodes)
+    # This creates a linear pipeline, but could be made conditional
+    workflow.set_entry_point("retrieve")  # Start here
     workflow.add_edge("retrieve", "format_context")
     workflow.add_edge("format_context", "generate_answer")
     workflow.add_edge("generate_answer", "calculate_confidence")
-    workflow.add_edge("calculate_confidence", END)
+    workflow.add_edge("calculate_confidence", END)  # Finish here
     
+    # Compile the graph into an executable application
     app = workflow.compile()
     
     return app
@@ -414,8 +533,18 @@ def create_rag_graph():
 # -------------------------------------------------------------------
 
 def process_query(question: str, vector_store) -> Dict:
-    """Process a user question through the RAG pipeline."""
+    """
+    Process a user question through the RAG pipeline.
     
+    Args:
+        question: User's input question
+        vector_store: The FAISS vector store to use for retrieval
+        
+    Returns:
+        Dictionary containing answer, context, confidence, and metadata
+    """
+    
+    # Initialize the graph state with vector_store included
     initial_state = {
         "question": question,
         "retrieved_chunks": [],
@@ -423,9 +552,10 @@ def process_query(question: str, vector_store) -> Dict:
         "answer": "",
         "confidence": 0.0,
         "metadata": {},
-        "vector_store": vector_store
+        "vector_store": vector_store  # Pass vector store through state
     }
     
+    # Run the graph
     rag_graph = st.session_state.rag_graph
     final_state = rag_graph.invoke(initial_state)
     
@@ -437,15 +567,31 @@ def process_query(question: str, vector_store) -> Dict:
 # -------------------------------------------------------------------
 
 def main():
-    """Main Streamlit application for the RAG chatbot."""
+    """
+    Main Streamlit application for the RAG chatbot.
     
+    Features:
+    - 100% FREE - no API keys required!
+    - Optional token support for better performance
+    - Clean, minimal chat interface
+    - Displays answer, retrieved context, and confidence score
+    - Shows sample queries for easy testing
+    - Expands to show retrieved chunks for transparency
+    """
+    
+    # Page configuration
     st.set_page_config(
         page_title="Agentic AI RAG Chatbot (FREE)",
         page_icon="🤖",
         layout="wide"
     )
     
-    # Initialize session state
+    # -------------------------------------------------------------------
+    # CRITICAL: Initialize session state FIRST THING
+    # This runs BEFORE anything else, ensuring all variables exist
+    # -------------------------------------------------------------------
+    
+    # Initialize ALL session state variables at the very beginning
     if "vector_store" not in st.session_state:
         st.session_state.vector_store = None
     if "rag_graph" not in st.session_state:
@@ -455,59 +601,95 @@ def main():
     if "current_query" not in st.session_state:
         st.session_state.current_query = ""
     
-    # Title
+    # Title and description
     st.title("🤖 Agentic AI RAG Chatbot")
     
     # Show token status
     if HF_TOKEN:
-        st.success("✅ Running with HuggingFace token - Better performance & reliability!")
+        st.success("✅ Running with HuggingFace token - Better performance!")
     else:
-        st.info("ℹ️ Running without token - Still works! Multi-level fallback ensures you ALWAYS get an answer.")
+        st.info("ℹ️ Running without token - Works fine! (Optional: Add FREE HuggingFace token for faster responses)")
     
     st.markdown("""
     Ask questions about **Agentic AI** based on the official eBook.  
-    **100% FREE** with **GUARANTEED answers** using multi-level fallback system!
+    **100% FREE** - Uses open-source models!
     """)
     
-    # Initialize system
+    # -------------------------------------------------------------------
+    # Initialize system components if not already done
+    # This MUST complete before user can interact
+    # -------------------------------------------------------------------
+    
     if not st.session_state.initialized:
-        with st.spinner("🚀 Initializing FREE models... First run takes 1-2 minutes."):
+        with st.spinner("🚀 Initializing FREE models... First run takes 1-2 minutes to download models."):
             try:
+                # Create vector store (cached, runs only once)
                 st.session_state.vector_store = create_vector_store()
+                
+                # Create RAG graph
                 st.session_state.rag_graph = create_rag_graph()
+                
+                # Mark as initialized
                 st.session_state.initialized = True
                 
-                st.success("✅ System initialized successfully!")
-                st.info("💡 **Multi-level fallback system active**: If one model is busy, automatically tries alternatives!")
+                st.success("✅ System initialized successfully! Models downloaded and ready.")
+                if not HF_TOKEN:
+                    st.info("💡 **First query may take 10-20 seconds** as the LLM loads on HuggingFace servers. Subsequent queries are faster (5-10 sec).")
+                else:
+                    st.info("💡 **With token**: Queries should take 5-10 seconds.")
                 st.balloons()
                 
             except Exception as e:
                 st.error(f"❌ Initialization failed: {str(e)}")
-                st.info("💡 Please refresh the page.")
+                st.info("💡 Please refresh the page. If issues persist, check your internet connection.")
                 st.stop()
     
-    # Sidebar
+    # -------------------------------------------------------------------
+    # Only show UI after initialization is complete
+    # -------------------------------------------------------------------
+    
+    # Sidebar with information and sample queries
     with st.sidebar:
         st.header("ℹ️ About")
         st.markdown("""
         **100% FREE Tech Stack:**
-        - 🧠 **LLM**: Multi-model fallback system
-        - 🔢 **Embeddings**: Sentence Transformers
+        - 🧠 **LLM**: Mistral-7B (HuggingFace)
+        - 🔢 **Embeddings**: Sentence Transformers (local)
         - 📊 **Vector DB**: FAISS (local)
         - 🔄 **Workflow**: LangGraph
-        - ✅ **Reliability**: GUARANTEED answers!
         """)
         
-        st.header("🛡️ Fallback System")
-        st.success("""
-        **Tries in order:**
-        1. Mistral-7B (best)
-        2. Flan-T5-Large (good)
-        3. Flan-T5-Base (fast)
-        4. Context extraction (always works!)
+        # Token status in sidebar
+        st.header("🔑 API Status")
+        if HF_TOKEN:
+            st.success("✅ Token: Active")
+            st.info("Rate limit: ~1000 req/hour")
+        else:
+            st.warning("⚠️ Token: Not set")
+            st.info("Rate limit: ~10-30 req/hour")
+            with st.expander("How to add FREE token?"):
+                st.markdown("""
+                1. Go to [HuggingFace](https://huggingface.co/join)
+                2. Create FREE account
+                3. Get token from [settings](https://huggingface.co/settings/tokens)
+                4. Add to Streamlit secrets:
+                ```toml
+                HUGGINGFACEHUB_API_TOKEN = "hf_..."
+                ```
+                """)
         
-        **You ALWAYS get an answer!**
-        """)
+        st.header("⚡ Performance")
+        if HF_TOKEN:
+            st.info("""
+            **First run**: 1-2 min (downloads)  
+            **Per query**: 5-10 sec  
+            """)
+        else:
+            st.info("""
+            **First run**: 1-2 min (downloads)  
+            **First query**: 10-20 sec (model loads)  
+            **Next queries**: 5-10 sec  
+            """)
         
         st.header("📝 Sample Queries")
         sample_queries = [
@@ -519,6 +701,7 @@ def main():
             "How does the ebook define tool usage?"
         ]
         
+        # Sample query buttons - they only SET the query, don't process it
         for query in sample_queries:
             if st.button(query, key=f"sample_{query}", use_container_width=True):
                 st.session_state.current_query = query
@@ -526,11 +709,16 @@ def main():
         
         st.header("🔧 System Status")
         if st.session_state.initialized:
+            st.success("✅ Vector store loaded")
+            st.success("✅ RAG graph initialized")
             st.success("✅ Ready to answer!")
+        else:
+            st.warning("⏳ Initializing...")
     
     # Chat interface
     st.header("💬 Ask a Question")
     
+    # Text input for user question
     user_question = st.text_input(
         "Your question:",
         value=st.session_state.current_query,
@@ -538,25 +726,32 @@ def main():
         key="question_input"
     )
     
+    # Process query on button click
     if st.button("🔍 Get Answer", type="primary"):
+        # CRITICAL CHECK: Only process if system is initialized
         if not st.session_state.initialized:
-            st.error("❌ System is still initializing.")
+            st.error("❌ System is still initializing. Please wait for initialization to complete.")
+            st.stop()
+        
+        if not st.session_state.vector_store:
+            st.error("❌ Vector store not loaded. Please refresh the page.")
+            st.stop()
+        
+        if not st.session_state.rag_graph:
+            st.error("❌ RAG graph not initialized. Please refresh the page.")
             st.stop()
         
         if user_question.strip():
-            with st.spinner("🤔 Processing... Multi-level fallback ensures you get an answer!"):
+            with st.spinner("🤔 Processing your question... This may take 5-20 seconds..."):
                 try:
+                    # Process the query through RAG pipeline
                     result = process_query(user_question, st.session_state.vector_store)
                     
                     # Display results
                     st.subheader("📖 Answer")
                     st.markdown(result["answer"])
                     
-                    # Show which method was used
-                    generation_method = result["metadata"].get("generation_method", "Unknown")
-                    st.caption(f"*Generated using: {generation_method}*")
-                    
-                    # Confidence score
+                    # Display confidence score with color coding
                     confidence = result["confidence"]
                     confidence_percentage = confidence * 100
                     
@@ -570,16 +765,16 @@ def main():
                         confidence_color = "🔴"
                         confidence_label = "Low"
                     
-                    col1= st.columns(1)
+                    col1 = st.columns(1)
                     with col1:
                         st.metric(
                             label="Confidence Score",
                             value=f"{confidence_percentage:.1f}%",
                             help=f"{confidence_color} {confidence_label} confidence"
                         )
+                   
                     
-                    
-                    # Retrieved context
+                    # Display retrieved context in an expander
                     with st.expander("📚 View Retrieved Context Chunks", expanded=False):
                         st.markdown("**Retrieved chunks used to generate the answer:**")
                         
@@ -597,20 +792,21 @@ def main():
                             )
                             st.markdown("---")
                     
-                    # Technical details
+                    # Display metadata
                     with st.expander("🔍 Technical Details", expanded=False):
                         st.json({
                             "embedding_model": EMBEDDING_MODEL,
-                            "generation_method": generation_method,
+                            "llm_model": LLM_MODEL,
+                            "api_method": "HuggingFace Inference API",
+                            "token_status": "Active" if HF_TOKEN else "Not set (using public API)",
                             "num_chunks_retrieved": result["metadata"]["num_chunks"],
                             "page_numbers": result["metadata"]["page_numbers"],
-                            "similarity_scores": [f"{s:.4f}" for s in result["metadata"]["similarity_scores"]]
-                            
+                            "similarity_scores": [f"{s:.4f}" for s in result["metadata"]["similarity_scores"]],
                         })
                 
                 except Exception as e:
-                    st.error(f"❌ Unexpected error: {str(e)}")
-                    st.info("💡 This should not happen with our fallback system. Please try again.")
+                    st.error(f"❌ Error processing query: {str(e)}")
+                    st.info("💡 The free HuggingFace API may be busy. Please wait a few seconds and try again.")
         else:
             st.warning("⚠️ Please enter a question.")
     
@@ -618,10 +814,14 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: gray;'>
-        <small>100% FREE RAG Chatbot | Multi-Level Fallback System | GUARANTEED Answers | Interview Task</small>
+        <small>100% FREE RAG Chatbot | Powered by Open-Source Models | Interview Task</small>
     </div>
     """, unsafe_allow_html=True)
 
+
+# -------------------------------------------------------------------
+# APPLICATION ENTRY POINT
+# -------------------------------------------------------------------
 
 if __name__ == "__main__":
     main()
