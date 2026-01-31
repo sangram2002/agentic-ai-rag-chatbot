@@ -4,9 +4,13 @@ RAG-based AI Chatbot for Agentic AI eBook (100% FREE VERSION)
 A complete Retrieval-Augmented Generation (RAG) system using LangGraph
 with FREE open-source models - NO API KEYS REQUIRED!
 
+Works perfectly:
+- WITHOUT any token (uses public HuggingFace API - slower, rate limited)
+- WITH optional FREE HuggingFace token (faster, higher rate limits)
+
 Uses:
 - Sentence Transformers for embeddings (runs locally)
-- Mistral-7B via Hugging Face Inference API (free tier)
+- Mistral-7B via Hugging Face Inference API (free)
 - FAISS for vector storage
 - LangGraph for workflow orchestration
 
@@ -19,6 +23,8 @@ import streamlit as st
 from typing import List, Dict, TypedDict
 import warnings
 warnings.filterwarnings('ignore')
+import requests
+import json
 
 # LangChain imports for document processing
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -26,15 +32,15 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain.schema import Document
 
-# Hugging Face imports for FREE embeddings and LLM
+# Hugging Face imports for FREE embeddings
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.llms import HuggingFaceHub
 
 # LangGraph imports for building the RAG workflow
 from langgraph.graph import StateGraph, END
 
 # For better LLM output
 import re
+import time
 
 # -------------------------------------------------------------------
 # CONFIGURATION - 100% FREE, NO API KEYS NEEDED!
@@ -61,16 +67,21 @@ TOP_K = 4  # Number of relevant chunks to retrieve
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 # LLM Model - Uses Hugging Face's FREE Inference API
-# Options (in order of quality vs speed):
-# 1. "mistralai/Mistral-7B-Instruct-v0.2" - Best quality, slower (RECOMMENDED)
-# 2. "google/flan-t5-large" - Good balance, faster
-# 3. "facebook/opt-1.3b" - Fastest, lower quality
+# Works with or without token!
 LLM_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{LLM_MODEL}"
 
-# Hugging Face API Token (optional, but recommended for better rate limits)
-# Get free token at: https://huggingface.co/settings/tokens
-# Even without this, the models will work on the free tier!
-HF_TOKEN = os.getenv("HUGGINGFACEHUB_API_TOKEN", "")
+# Try to get HuggingFace token from environment or Streamlit secrets
+# This is OPTIONAL - works without it!
+HF_TOKEN = None
+try:
+    # Try environment variable first
+    HF_TOKEN = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+    if not HF_TOKEN:
+        # Try Streamlit secrets
+        HF_TOKEN = st.secrets.get("HUGGINGFACEHUB_API_TOKEN", None)
+except:
+    HF_TOKEN = None
 
 
 # -------------------------------------------------------------------
@@ -100,10 +111,124 @@ class GraphState(TypedDict):
 
 
 # -------------------------------------------------------------------
+# FREE LLM INFERENCE FUNCTION (WORKS WITH OR WITHOUT TOKEN!)
+# -------------------------------------------------------------------
+
+def call_huggingface_api(prompt: str, max_retries: int = 3) -> str:
+    """
+    Call Hugging Face Inference API.
+    
+    Works in two modes:
+    1. WITHOUT token: Uses public API (slower, rate limited ~10-30 req/hour)
+    2. WITH token: Uses authenticated API (faster, ~1000 req/hour)
+    
+    Args:
+        prompt: The prompt to send to the model
+        max_retries: Number of times to retry if the model is loading
+        
+    Returns:
+        Generated text from the model
+    """
+    
+    # Build headers - add token if available
+    headers = {"Content-Type": "application/json"}
+    if HF_TOKEN:
+        headers["Authorization"] = f"Bearer {HF_TOKEN}"
+    
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "temperature": 0.1,
+            "max_new_tokens": 512,
+            "return_full_text": False,
+            "do_sample": True,
+        }
+    }
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                HF_API_URL,
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
+            
+            # Check if successful
+            if response.status_code == 200:
+                result = response.json()
+                
+                # Handle different response formats
+                if isinstance(result, list) and len(result) > 0:
+                    return result[0].get("generated_text", "")
+                elif isinstance(result, dict):
+                    return result.get("generated_text", "")
+                else:
+                    return str(result)
+            
+            # Handle model loading state (common on first request)
+            elif response.status_code == 503:
+                error_data = response.json()
+                if "estimated_time" in error_data:
+                    wait_time = min(error_data["estimated_time"], 20)
+                    st.info(f"🔄 Model is loading on HuggingFace servers... Waiting {wait_time:.0f} seconds (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    st.info(f"⏳ Model is loading... Retrying in 5 seconds (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(5)
+                    continue
+            
+            # Handle rate limiting (more common without token)
+            elif response.status_code == 429:
+                if HF_TOKEN:
+                    st.warning("⚠️ Rate limit reached even with token. Waiting 10 seconds...")
+                else:
+                    st.warning("⚠️ Rate limit reached. Consider adding a FREE HuggingFace token for higher limits. Waiting 10 seconds...")
+                time.sleep(10)
+                continue
+            
+            # Handle authentication errors
+            elif response.status_code == 401:
+                st.warning("⚠️ Invalid HuggingFace token. Falling back to public API...")
+                # Remove the token and retry without it
+                headers.pop("Authorization", None)
+                continue
+            
+            else:
+                # Other errors
+                error_msg = response.text
+                if attempt < max_retries - 1:
+                    st.info(f"⚠️ API error (Status {response.status_code}). Retrying... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(3)
+                    continue
+                else:
+                    return f"Unable to generate response. API returned status {response.status_code}. Please try again."
+        
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                st.info(f"⏱️ Request timeout. Retrying... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(3)
+                continue
+            else:
+                return "Request timeout. The API may be busy. Please try again in a few moments."
+        
+        except Exception as e:
+            if attempt < max_retries - 1:
+                st.info(f"⚠️ Error: {str(e)[:50]}... Retrying... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(3)
+                continue
+            else:
+                return f"Unable to generate answer. Error: {str(e)[:100]}"
+    
+    return "Unable to generate answer after multiple attempts. The free API may be busy. Please try again in a few moments."
+
+
+# -------------------------------------------------------------------
 # PDF INGESTION & VECTOR STORE CREATION
 # -------------------------------------------------------------------
 
-@st.cache_resource(show_spinner="Loading and processing PDF with FREE models...")
+@st.cache_resource(show_spinner="📚 Loading and processing PDF with FREE models...")
 def create_vector_store():
     """
     Load PDF, chunk text, generate embeddings, and create vector store.
@@ -250,11 +375,11 @@ def generate_answer_node(state: GraphState) -> GraphState:
     - No external knowledge or assumptions allowed
     - This ensures factual accuracy and prevents hallucinations
     
-    Why Mistral-7B?
+    Why Mistral-7B via Direct API?
     - One of the best open-source models (comparable to GPT-3.5)
+    - FREE - works with or without token
     - Specifically trained for instruction following
-    - FREE via Hugging Face Inference API
-    - No API key required (but works better with free HF token)
+    - Works out of the box with zero configuration
     
     Args:
         state: Current graph state with question and context
@@ -264,19 +389,6 @@ def generate_answer_node(state: GraphState) -> GraphState:
     """
     question = state["question"]
     context = state["context"]
-    
-    # Initialize the FREE LLM via Hugging Face
-    # Even without HF_TOKEN, this works on the free tier!
-    # With a free HF token, you get better rate limits
-    llm = HuggingFaceHub(
-        repo_id=LLM_MODEL,
-        huggingfacehub_api_token=HF_TOKEN if HF_TOKEN else None,
-        model_kwargs={
-            "temperature": 0.1,  # Low temperature for focused, deterministic output
-            "max_new_tokens": 512,  # Maximum length of generated answer
-            "return_full_text": False,  # Only return the generated part
-        }
-    )
     
     # GROUNDING PROMPT TEMPLATE FOR MISTRAL
     # Mistral uses [INST] instruction format for best results
@@ -296,9 +408,10 @@ QUESTION: {question}
 
 ANSWER (based only on context above): [/INST]"""
 
-    # Generate the answer using the free LLM
+    # Generate the answer using the FREE Hugging Face API
     try:
-        response = llm.invoke(prompt)
+        response = call_huggingface_api(prompt)
+        
         # Clean up the response (remove any residual formatting)
         answer = response.strip()
         
@@ -308,12 +421,17 @@ ANSWER (based only on context above): [/INST]"""
         answer = re.sub(r'</?s>', '', answer).strip()  # Remove special tokens
         
         # If answer is too short or looks like an error, provide fallback
-        if len(answer) < 10 or "error" in answer.lower():
-            answer = "I cannot find this information in the provided eBook content."
+        if len(answer) < 10 or "error" in answer.lower()[:50]:
+            if "cannot find" in answer.lower() or "not in the context" in answer.lower():
+                # This is a valid "not found" response
+                answer = "I cannot find this information in the provided eBook content."
+            elif len(answer) < 10:
+                answer = "I cannot find this information in the provided eBook content."
+            # else keep the error/response message as is
             
     except Exception as e:
-        # If LLM fails (rate limit, network issue), provide informative fallback
-        answer = f"Unable to generate answer at this time. Please try again in a few seconds. (The free API may be busy)"
+        # If something goes wrong, provide informative fallback
+        answer = f"Unable to generate answer at this time. Please try again in a few moments."
     
     state["answer"] = answer
     
@@ -373,7 +491,7 @@ def create_rag_graph():
     1. START → User submits question
     2. RETRIEVE → Fetch relevant chunks from vector DB (local, free)
     3. FORMAT → Format chunks into context string
-    4. GENERATE → LLM generates grounded answer (free Hugging Face API)
+    4. GENERATE → LLM generates grounded answer (free HF API)
     5. CONFIDENCE → Calculate confidence score
     6. END → Return final response
     
@@ -456,6 +574,7 @@ def main():
     
     Features:
     - 100% FREE - no API keys required!
+    - Optional token support for better performance
     - Clean, minimal chat interface
     - Displays answer, retrieved context, and confidence score
     - Shows sample queries for easy testing
@@ -470,8 +589,8 @@ def main():
     )
     
     # -------------------------------------------------------------------
-    # CRITICAL FIX: Initialize session state FIRST THING
-    # This runs BEFORE anything else, ensuring vector_store always exists
+    # CRITICAL: Initialize session state FIRST THING
+    # This runs BEFORE anything else, ensuring all variables exist
     # -------------------------------------------------------------------
     
     # Initialize ALL session state variables at the very beginning
@@ -486,9 +605,16 @@ def main():
     
     # Title and description
     st.title("🤖 Agentic AI RAG Chatbot")
+    
+    # Show token status
+    if HF_TOKEN:
+        st.success("✅ Running with HuggingFace token - Better performance!")
+    else:
+        st.info("ℹ️ Running without token - Works fine! (Optional: Add FREE HuggingFace token for faster responses)")
+    
     st.markdown("""
     Ask questions about **Agentic AI** based on the official eBook.  
-    **100% FREE** - Uses open-source models, no API keys required! 🎉
+    **100% FREE** - Uses open-source models!
     """)
     
     # -------------------------------------------------------------------
@@ -509,11 +635,15 @@ def main():
                 st.session_state.initialized = True
                 
                 st.success("✅ System initialized successfully! Models downloaded and ready.")
+                if not HF_TOKEN:
+                    st.info("💡 **First query may take 10-20 seconds** as the LLM loads on HuggingFace servers. Subsequent queries are faster (5-10 sec).")
+                else:
+                    st.info("💡 **With token**: Queries should take 5-10 seconds.")
                 st.balloons()
                 
             except Exception as e:
                 st.error(f"❌ Initialization failed: {str(e)}")
-                st.info("💡 If you see errors, try refreshing the page. If issues persist, check your internet connection.")
+                st.info("💡 Please refresh the page. If issues persist, check your internet connection.")
                 st.stop()
     
     # -------------------------------------------------------------------
@@ -525,21 +655,46 @@ def main():
         st.header("ℹ️ About")
         st.markdown("""
         **100% FREE Tech Stack:**
-        - 🧠 **LLM**: Mistral-7B (via HuggingFace)
+        - 🧠 **LLM**: Mistral-7B (HuggingFace)
         - 🔢 **Embeddings**: Sentence Transformers (local)
         - 📊 **Vector DB**: FAISS (local)
         - 🔄 **Workflow**: LangGraph
         - ✅ **Cost**: $0.00 forever!
-        
-        **No API keys needed!** Everything runs free.
         """)
+        
+        # Token status in sidebar
+        st.header("🔑 API Status")
+        if HF_TOKEN:
+            st.success("✅ Token: Active")
+            st.info("Rate limit: ~1000 req/hour")
+        else:
+            st.warning("⚠️ Token: Not set")
+            st.info("Rate limit: ~10-30 req/hour")
+            with st.expander("How to add FREE token?"):
+                st.markdown("""
+                1. Go to [HuggingFace](https://huggingface.co/join)
+                2. Create FREE account
+                3. Get token from [settings](https://huggingface.co/settings/tokens)
+                4. Add to Streamlit secrets:
+                ```toml
+                HUGGINGFACEHUB_API_TOKEN = "hf_..."
+                ```
+                """)
         
         st.header("⚡ Performance")
-        st.info("""
-        **First run**: 1-2 min (downloads models)  
-        **Subsequent**: 5-10 sec per query  
-        **Cost**: FREE ✅
-        """)
+        if HF_TOKEN:
+            st.info("""
+            **First run**: 1-2 min (downloads)  
+            **Per query**: 5-10 sec  
+            **Cost**: FREE ✅
+            """)
+        else:
+            st.info("""
+            **First run**: 1-2 min (downloads)  
+            **First query**: 10-20 sec (model loads)  
+            **Next queries**: 5-10 sec  
+            **Cost**: FREE ✅
+            """)
         
         st.header("📝 Sample Queries")
         sample_queries = [
@@ -555,24 +710,15 @@ def main():
         for query in sample_queries:
             if st.button(query, key=f"sample_{query}", use_container_width=True):
                 st.session_state.current_query = query
-                # Force a rerun to update the text input
                 st.rerun()
         
         st.header("🔧 System Status")
         if st.session_state.initialized:
             st.success("✅ Vector store loaded")
             st.success("✅ RAG graph initialized")
+            st.success("✅ Ready to answer!")
         else:
             st.warning("⏳ Initializing...")
-            
-        st.header("💡 Optional Setup")
-        st.markdown("""
-        For better rate limits (optional):
-        1. Get free token at [HuggingFace](https://huggingface.co/settings/tokens)
-        2. Add to Streamlit secrets as `HUGGINGFACEHUB_API_TOKEN`
-        
-        **Not required** - works without it!
-        """)
     
     # Chat interface
     st.header("💬 Ask a Question")
@@ -601,10 +747,9 @@ def main():
             st.stop()
         
         if user_question.strip():
-            with st.spinner("🤔 Processing your question with FREE models... (5-10 seconds)"):
+            with st.spinner("🤔 Processing your question... This may take 5-20 seconds..."):
                 try:
                     # Process the query through RAG pipeline
-                    # Pass vector_store explicitly to avoid any session_state issues
                     result = process_query(user_question, st.session_state.vector_store)
                     
                     # Display results
@@ -636,7 +781,7 @@ def main():
                         st.metric(
                             label="Cost",
                             value="$0.00",
-                            help="100% FREE - no API charges!"
+                            help="100% FREE - no charges!"
                         )
                     
                     # Display retrieved context in an expander
@@ -662,6 +807,8 @@ def main():
                         st.json({
                             "embedding_model": EMBEDDING_MODEL,
                             "llm_model": LLM_MODEL,
+                            "api_method": "HuggingFace Inference API",
+                            "token_status": "Active" if HF_TOKEN else "Not set (using public API)",
                             "num_chunks_retrieved": result["metadata"]["num_chunks"],
                             "page_numbers": result["metadata"]["page_numbers"],
                             "similarity_scores": [f"{s:.4f}" for s in result["metadata"]["similarity_scores"]],
@@ -670,7 +817,7 @@ def main():
                 
                 except Exception as e:
                     st.error(f"❌ Error processing query: {str(e)}")
-                    st.info("💡 If you see rate limit errors from HuggingFace, please wait a few seconds and try again. The free tier has rate limits.")
+                    st.info("💡 The free HuggingFace API may be busy. Please wait a few seconds and try again.")
         else:
             st.warning("⚠️ Please enter a question.")
     
@@ -678,7 +825,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: gray;'>
-        <small>100% FREE RAG Chatbot | Powered by Open-Source Models | No API Keys Required | Interview Task</small>
+        <small>100% FREE RAG Chatbot | Powered by Open-Source Models | Interview Task</small>
     </div>
     """, unsafe_allow_html=True)
 
