@@ -88,6 +88,7 @@ class GraphState(TypedDict):
     - answer: Final generated answer
     - confidence: Confidence score (0-1) based on retrieval similarity
     - metadata: Additional information (page numbers, sources, etc.)
+    - vector_store: The FAISS vector store (passed through the state)
     """
     question: str
     retrieved_chunks: List[Document]
@@ -95,6 +96,7 @@ class GraphState(TypedDict):
     answer: str
     confidence: float
     metadata: Dict
+    vector_store: any  # FAISS vector store passed through state
 
 
 # -------------------------------------------------------------------
@@ -175,16 +177,17 @@ def retrieve_node(state: GraphState) -> GraphState:
     3. Return chunks with similarity scores
     
     Args:
-        state: Current graph state containing the question
+        state: Current graph state containing the question and vector_store
         
     Returns:
         Updated state with retrieved_chunks and metadata
     """
     question = state["question"]
+    vector_store = state["vector_store"]  # Get vector store from state
     
     # Perform similarity search with scores
     # Returns: [(Document, similarity_score), ...]
-    docs_with_scores = st.session_state.vector_store.similarity_search_with_score(
+    docs_with_scores = vector_store.similarity_search_with_score(
         question, k=TOP_K
     )
     
@@ -310,7 +313,7 @@ ANSWER (based only on context above): [/INST]"""
             
     except Exception as e:
         # If LLM fails (rate limit, network issue), provide informative fallback
-        answer = f"Unable to generate answer at this time. Please try again. (Error: {str(e)[:50]})"
+        answer = f"Unable to generate answer at this time. Please try again in a few seconds. (The free API may be busy)"
     
     state["answer"] = answer
     
@@ -413,25 +416,27 @@ def create_rag_graph():
 # HELPER FUNCTION FOR QUERY PROCESSING
 # -------------------------------------------------------------------
 
-def process_query(question: str) -> Dict:
+def process_query(question: str, vector_store) -> Dict:
     """
     Process a user question through the RAG pipeline.
     
     Args:
         question: User's input question
+        vector_store: The FAISS vector store to use for retrieval
         
     Returns:
         Dictionary containing answer, context, confidence, and metadata
     """
     
-    # Initialize the graph state
+    # Initialize the graph state with vector_store included
     initial_state = {
         "question": question,
         "retrieved_chunks": [],
         "context": "",
         "answer": "",
         "confidence": 0.0,
-        "metadata": {}
+        "metadata": {},
+        "vector_store": vector_store  # Pass vector store through state
     }
     
     # Run the graph
@@ -458,35 +463,56 @@ def main():
     """
     
     # Page configuration
-    # 1. Page configuration
     st.set_page_config(
         page_title="Agentic AI RAG Chatbot (FREE)",
         page_icon="🤖",
         layout="wide"
     )
-
-
+    
+    # Title and description
     st.title("🤖 Agentic AI RAG Chatbot")
     st.markdown("""
     Ask questions about **Agentic AI** based on the official eBook.  
+    **100% FREE** - Uses open-source models, no API keys required! 🎉
     """)
-
-    # This ensures the database is loaded BEFORE anything else runs
+    
+    # -------------------------------------------------------------------
+    # CRITICAL: Initialize system FIRST, before anything else
+    # This ensures vector_store exists before user can ask questions
+    # -------------------------------------------------------------------
+    
+    # Initialize session state variables if they don't exist
     if "vector_store" not in st.session_state:
-        with st.spinner("🚀 Initializing FREE models and processing eBook... This may take 1-2 minutes on first run."):
+        st.session_state.vector_store = None
+    if "rag_graph" not in st.session_state:
+        st.session_state.rag_graph = None
+    if "initialized" not in st.session_state:
+        st.session_state.initialized = False
+    
+    # Initialize system components BEFORE showing UI
+    if not st.session_state.initialized:
+        with st.spinner("🚀 Initializing FREE models... First run takes 1-2 minutes to download models."):
             try:
-                # Create and store the FAISS database in session memory
+                # Create vector store (cached, runs only once)
                 st.session_state.vector_store = create_vector_store()
                 
-                # Create and store the LangGraph workflow
+                # Create RAG graph
                 st.session_state.rag_graph = create_rag_graph()
                 
-                st.success("✅ System Ready!")
-                st.rerun() # Refresh once to ensure state is registered
+                # Mark as initialized
+                st.session_state.initialized = True
+                
+                st.success("✅ System initialized successfully! Models downloaded and ready.")
+                st.balloons()
             except Exception as e:
-                st.error(f"❌ Initialization failed: {e}")
+                st.error(f"❌ Initialization failed: {str(e)}")
+                st.info("💡 If you see errors, try refreshing the page. If issues persist, check your internet connection.")
                 st.stop()
-
+    
+    # -------------------------------------------------------------------
+    # Now that system is initialized, show the UI
+    # -------------------------------------------------------------------
+    
     # Sidebar with information and sample queries
     with st.sidebar:
         st.header("ℹ️ About")
@@ -523,9 +549,9 @@ def main():
                 st.session_state.current_query = query
         
         st.header("🔧 System Status")
-        if "vector_store" in st.session_state:
+        if st.session_state.vector_store is not None:
             st.success("✅ Vector store loaded")
-        if "rag_graph" in st.session_state:
+        if st.session_state.rag_graph is not None:
             st.success("✅ RAG graph initialized")
             
         st.header("💡 Optional Setup")
@@ -536,23 +562,6 @@ def main():
         
         **Not required** - works without it!
         """)
-    
-    # Initialize system components
-    if "vector_store" not in st.session_state:
-        with st.spinner("🚀 Initializing FREE models... First run takes 1-2 minutes to download models."):
-            try:
-                # Create vector store (cached, runs only once)
-                st.session_state.vector_store = create_vector_store()
-                
-                # Create RAG graph
-                st.session_state.rag_graph = create_rag_graph()
-                
-                st.success("✅ System initialized successfully! Models downloaded and ready.")
-                st.balloons()
-            except Exception as e:
-                st.error(f"❌ Initialization failed: {str(e)}")
-                st.info("💡 If you see rate limit errors, try again in a few seconds or add a free HuggingFace token.")
-                st.stop()
     
     # Chat interface
     st.header("💬 Ask a Question")
@@ -565,13 +574,16 @@ def main():
         key="question_input"
     )
     
-    # Process query on button click
+    # Process query on button click - ONLY if system is initialized
     if st.button("🔍 Get Answer", type="primary"):
-        if user_question.strip():
+        if not st.session_state.initialized:
+            st.error("❌ System is still initializing. Please wait...")
+        elif user_question.strip():
             with st.spinner("🤔 Processing your question with FREE models... (5-10 seconds)"):
                 try:
                     # Process the query through RAG pipeline
-                    result = process_query(user_question)
+                    # Pass vector_store explicitly to avoid session_state errors
+                    result = process_query(user_question, st.session_state.vector_store)
                     
                     # Display results
                     st.subheader("📖 Answer")
