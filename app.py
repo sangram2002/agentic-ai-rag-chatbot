@@ -469,6 +469,21 @@ def main():
         layout="wide"
     )
     
+    # -------------------------------------------------------------------
+    # CRITICAL FIX: Initialize session state FIRST THING
+    # This runs BEFORE anything else, ensuring vector_store always exists
+    # -------------------------------------------------------------------
+    
+    # Initialize ALL session state variables at the very beginning
+    if "vector_store" not in st.session_state:
+        st.session_state.vector_store = None
+    if "rag_graph" not in st.session_state:
+        st.session_state.rag_graph = None
+    if "initialized" not in st.session_state:
+        st.session_state.initialized = False
+    if "current_query" not in st.session_state:
+        st.session_state.current_query = ""
+    
     # Title and description
     st.title("🤖 Agentic AI RAG Chatbot")
     st.markdown("""
@@ -477,19 +492,10 @@ def main():
     """)
     
     # -------------------------------------------------------------------
-    # CRITICAL: Initialize system FIRST, before anything else
-    # This ensures vector_store exists before user can ask questions
+    # Initialize system components if not already done
+    # This MUST complete before user can interact
     # -------------------------------------------------------------------
     
-    # Initialize session state variables if they don't exist
-    if "vector_store" not in st.session_state:
-        st.session_state.vector_store = None
-    if "rag_graph" not in st.session_state:
-        st.session_state.rag_graph = None
-    if "initialized" not in st.session_state:
-        st.session_state.initialized = False
-    
-    # Initialize system components BEFORE showing UI
     if not st.session_state.initialized:
         with st.spinner("🚀 Initializing FREE models... First run takes 1-2 minutes to download models."):
             try:
@@ -504,13 +510,14 @@ def main():
                 
                 st.success("✅ System initialized successfully! Models downloaded and ready.")
                 st.balloons()
+                
             except Exception as e:
                 st.error(f"❌ Initialization failed: {str(e)}")
                 st.info("💡 If you see errors, try refreshing the page. If issues persist, check your internet connection.")
                 st.stop()
     
     # -------------------------------------------------------------------
-    # Now that system is initialized, show the UI
+    # Only show UI after initialization is complete
     # -------------------------------------------------------------------
     
     # Sidebar with information and sample queries
@@ -544,15 +551,19 @@ def main():
             "How does the ebook define tool usage?"
         ]
         
+        # Sample query buttons - they only SET the query, don't process it
         for query in sample_queries:
-            if st.button(query, key=query, use_container_width=True):
+            if st.button(query, key=f"sample_{query}", use_container_width=True):
                 st.session_state.current_query = query
+                # Force a rerun to update the text input
+                st.rerun()
         
         st.header("🔧 System Status")
-        if st.session_state.vector_store is not None:
+        if st.session_state.initialized:
             st.success("✅ Vector store loaded")
-        if st.session_state.rag_graph is not None:
             st.success("✅ RAG graph initialized")
+        else:
+            st.warning("⏳ Initializing...")
             
         st.header("💡 Optional Setup")
         st.markdown("""
@@ -569,20 +580,31 @@ def main():
     # Text input for user question
     user_question = st.text_input(
         "Your question:",
-        value=st.session_state.get("current_query", ""),
+        value=st.session_state.current_query,
         placeholder="e.g., What is Agentic AI?",
         key="question_input"
     )
     
-    # Process query on button click - ONLY if system is initialized
+    # Process query on button click
     if st.button("🔍 Get Answer", type="primary"):
+        # CRITICAL CHECK: Only process if system is initialized
         if not st.session_state.initialized:
-            st.error("❌ System is still initializing. Please wait...")
-        elif user_question.strip():
+            st.error("❌ System is still initializing. Please wait for initialization to complete.")
+            st.stop()
+        
+        if not st.session_state.vector_store:
+            st.error("❌ Vector store not loaded. Please refresh the page.")
+            st.stop()
+        
+        if not st.session_state.rag_graph:
+            st.error("❌ RAG graph not initialized. Please refresh the page.")
+            st.stop()
+        
+        if user_question.strip():
             with st.spinner("🤔 Processing your question with FREE models... (5-10 seconds)"):
                 try:
                     # Process the query through RAG pipeline
-                    # Pass vector_store explicitly to avoid session_state errors
+                    # Pass vector_store explicitly to avoid any session_state issues
                     result = process_query(user_question, st.session_state.vector_store)
                     
                     # Display results
