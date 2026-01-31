@@ -202,9 +202,7 @@ def call_huggingface_api(prompt: str, max_retries: int = 3) -> str:
                     st.info(f"⚠️ API error (Status {response.status_code}). Retrying... (attempt {attempt + 1}/{max_retries})")
                     time.sleep(3)
                     continue
-                else:
-                    return f"Unable to generate response. API returned status {response.status_code}. Please try again."
-        
+                
         except requests.exceptions.Timeout:
             if attempt < max_retries - 1:
                 st.info(f"⏱️ Request timeout. Retrying... (attempt {attempt + 1}/{max_retries})")
@@ -659,7 +657,6 @@ def main():
         - 🔢 **Embeddings**: Sentence Transformers (local)
         - 📊 **Vector DB**: FAISS (local)
         - 🔄 **Workflow**: LangGraph
-        - ✅ **Cost**: $0.00 forever!
         """)
         
         # Token status in sidebar
@@ -686,14 +683,12 @@ def main():
             st.info("""
             **First run**: 1-2 min (downloads)  
             **Per query**: 5-10 sec  
-            **Cost**: FREE ✅
             """)
         else:
             st.info("""
             **First run**: 1-2 min (downloads)  
             **First query**: 10-20 sec (model loads)  
             **Next queries**: 5-10 sec  
-            **Cost**: FREE ✅
             """)
         
         st.header("📝 Sample Queries")
@@ -807,7 +802,6 @@ def main():
                             "num_chunks_retrieved": result["metadata"]["num_chunks"],
                             "page_numbers": result["metadata"]["page_numbers"],
                             "similarity_scores": [f"{s:.4f}" for s in result["metadata"]["similarity_scores"]],
-                            "total_cost": "$0.00 (FREE!)"
                         })
                 
                 except Exception as e:
