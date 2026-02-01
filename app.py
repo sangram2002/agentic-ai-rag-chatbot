@@ -494,7 +494,6 @@ def main():
     
     st.markdown("""
     Ask questions about **Agentic AI** based on the official eBook.  
-    **Powered by Groq** - Experience blazing fast 1-2 second responses! ⚡
     """)
     
     # -------------------------------------------------------------------
@@ -532,10 +531,10 @@ def main():
         st.header("ℹ️ About")
         st.markdown("""
         **100% FREE Tech Stack:**
-        - ⚡ **LLM**: Groq (Llama-3.1-70B)
-        - 🔢 **Embeddings**: Sentence Transformers (local)
-        - 📊 **Vector DB**: FAISS (local)
-        - 🔄 **Workflow**: LangGraph
+        -  **LLM**: Groq (Llama-3.1-70B)
+        -  **Embeddings**: Sentence Transformers (local)
+        -  **Vector DB**: FAISS (local)
+        -  **Workflow**: LangGraph
 
         
         **Why Groq is Amazing:**
@@ -581,7 +580,7 @@ def main():
     )
     
     # Process query on button click
-    if st.button("⚡ Get Answer (1-2 seconds!)", type="primary"):
+    if st.button("⚡ Get Answer)", type="primary"):
         # CRITICAL CHECK: Only process if system is initialized
         if not st.session_state.initialized:
             st.error("❌ System is still initializing. Please wait for initialization to complete.")
@@ -682,7 +681,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: gray;'>
-        <small>⚡ Powered by Groq | 100% FREE | Blazing Fast 1-2 Second Responses | Interview Task</small>
+        <small>⚡ Powered by Groq | Blazing Fast Responses | </small>
     </div>
     """, unsafe_allow_html=True)
 
