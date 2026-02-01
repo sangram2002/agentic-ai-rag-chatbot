@@ -1,18 +1,21 @@
-# Core dependencies
+# UI and Logging
 streamlit==1.31.0
 rich==13.7.0
 
-# LangChain ecosystem (Updated for compatibility)
+# LangChain Core and Graph
 langchain==0.1.9
 langchain-community==0.0.24
 langgraph==0.0.26
 
-# Groq and AI models
+# Groq Integration
 langchain-groq==0.1.3
 groq==0.4.1
-langchain-huggingface==0.0.1
-sentence-transformers==2.5.1
 
-# Document processing
+# Embeddings (Versions aligned to prevent conflicts)
+langchain-huggingface==0.0.1
+sentence-transformers==2.7.0
+
+# Utilities
 pypdf==4.0.1
 faiss-cpu==1.7.4
+python-dotenv==1.0.1
