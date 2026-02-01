@@ -72,12 +72,10 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 # - "llama-3.1-70b-versatile" - Best quality (recommended)
 # - "llama-3.1-8b-instant" - Fastest
 # - "mixtral-8x7b-32768" - Good balance
-primary_llm = ChatGroq(model="llama-3.3-70b-versatile")
-backup_llm = ChatGroq(model="llama-3.1-8b-instant")
 
-# This creates a resilient chain
-LLM_MODEL  = primary_llm.with_fallbacks([backup_llm])
-
+# Just define the IDs as strings here
+PRIMARY_MODEL_ID = "llama-3.3-70b-versatile"
+BACKUP_MODEL_ID = "llama-3.1-8b-instant"
 
 # Groq API Key (FREE - get from https://console.groq.com)
 # Sign up is free and takes 1 minute!
@@ -256,7 +254,6 @@ def format_context_node(state: GraphState) -> GraphState:
     
     return state
 
-
 def generate_answer_node(state: GraphState) -> GraphState:
     """
     Node 3: Answer Generation
@@ -285,61 +282,49 @@ def generate_answer_node(state: GraphState) -> GraphState:
     question = state["question"]
     context = state["context"]
     
-    # Check if Groq API key is available
     if not GROQ_API_KEY:
-        state["answer"] = "⚠️ Groq API key not found. Please add GROQ_API_KEY to your Streamlit secrets or environment variables. Get a FREE key at https://console.groq.com"
+        state["answer"] = "⚠️ Groq API key not found."
         return state
-    
-    # Initialize Groq LLM - SUPER FAST!
-    llm = ChatGroq(
-        model=LLM_MODEL,
+
+    # 1. Create the primary LLM object
+    primary_llm = ChatGroq(
+        model=PRIMARY_MODEL_ID, # Use the string ID
         groq_api_key=GROQ_API_KEY,
-        temperature=0.1,  # Low temperature for focused, deterministic output
-        max_tokens=512,  # Maximum length of generated answer
+        temperature=0.1,
+        max_tokens=512,
     )
     
-    # GROUNDING PROMPT TEMPLATE
-    # This is the most critical part - it enforces strict grounding
-    prompt = f"""You are a helpful assistant answering questions about Agentic AI based STRICTLY on the provided context from an eBook.
+    # 2. Create the backup LLM object
+    backup_llm = ChatGroq(
+        model=BACKUP_MODEL_ID, # Use the string ID
+        groq_api_key=GROQ_API_KEY,
+        temperature=0.1,
+        max_tokens=512,
+    )
 
-STRICT RULES:
-1. Use ONLY the information provided in the context below - DO NOT use any external knowledge
-2. If the answer is not found in the context, respond EXACTLY with: "I cannot find this information in the provided eBook content."
-3. Be concise and direct - no unnecessary explanations
-4. Quote or reference specific parts of the context when possible
-5. Stay focused on the question
+    # 3. Combine them with fallbacks
+    llm_chain = primary_llm.with_fallbacks([backup_llm])
 
-CONTEXT FROM EBOOK:
-{context}
+    prompt = f"""You are a helpful assistant answering questions about Agentic AI based STRICTLY on the provided context...
+    CONTEXT: {context}
+    QUESTION: {question}
+    ANSWER:"""
 
-QUESTION:
-{question}
-
-ANSWER (based only on the context above):"""
-
-    # Generate the answer using Groq (BLAZING FAST - 1-2 seconds!)
     try:
-        response = llm.invoke(prompt)
+        # 4. Invoke the chain (the fallback handles the decommissioning error automatically)
+        response = llm_chain.invoke(prompt)
         answer = response.content.strip()
         
-        # Post-process to ensure quality
-        # Remove any residual artifacts
         if len(answer) < 10:
             answer = "I cannot find this information in the provided eBook content."
             
     except Exception as e:
-        # If Groq fails (rare), provide informative fallback
-        error_msg = str(e)
-        if "rate_limit" in error_msg.lower():
-            answer = "Rate limit reached. Please wait a moment and try again."
-        elif "api_key" in error_msg.lower():
-            answer = "Invalid Groq API key. Please check your GROQ_API_KEY in Streamlit secrets."
-        else:
-            answer = f"Unable to generate answer. Error: {error_msg[:100]}"
+        answer = f"Unable to generate answer. Error: {str(e)[:100]}"
     
     state["answer"] = answer
-    
     return state
+
+
 
 
 def calculate_confidence_node(state: GraphState) -> GraphState:
