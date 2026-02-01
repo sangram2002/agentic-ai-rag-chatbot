@@ -72,7 +72,12 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 # - "llama-3.1-70b-versatile" - Best quality (recommended)
 # - "llama-3.1-8b-instant" - Fastest
 # - "mixtral-8x7b-32768" - Good balance
-LLM_MODEL = "llama-3.1-70b-versatile"
+primary_llm = ChatGroq(model="llama-3.3-70b-versatile")
+backup_llm = ChatGroq(model="llama-3.1-8b-instant")
+
+# This creates a resilient chain
+LLM_MODEL  = primary_llm.with_fallbacks([backup_llm])
+
 
 # Groq API Key (FREE - get from https://console.groq.com)
 # Sign up is free and takes 1 minute!
