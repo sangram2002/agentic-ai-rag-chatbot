@@ -1,3 +1,7 @@
+[Streamlit UI Link](https://agentic-ai-rag-chatbot-1.streamlit.app/)
+
+This is the link to open the app in streamlit.
+
 # Agentic AI RAG Chatbot
 
 A simple chatbot that answers questions from the Agentic AI eBook. Built with free tools and designed to be fast and easy to understand.
@@ -111,7 +115,6 @@ Works on Streamlit Cloud. Just:
 
 I wanted something that:
 - Actually works reliably (not just works once)
-- Is easy to explain in an interview
 - Uses modern tools (LangGraph is new, shows I keep up)
 - Doesn't require paid APIs
 - Can be deployed in 5 minutes
