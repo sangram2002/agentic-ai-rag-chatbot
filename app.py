@@ -47,7 +47,9 @@ import re
 # -------------------------------------------------------------------
 # CONFIGURATION - 100% FREE, BLAZING FAST!
 # -------------------------------------------------------------------
-
+# --- Configuration ---
+# Llama 3.3 70B is currently the best "all-rounder" on Groq
+SELECTED_MODEL = "llama-3.3-70b-versatile" 
 # PDF URL for the Agentic AI eBook
 PDF_URL = "https://konverge.ai/pdf/Ebook-Agentic-AI.pdf"
 
@@ -73,9 +75,6 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 # - "llama-3.1-8b-instant" - Fastest
 # - "mixtral-8x7b-32768" - Good balance
 
-# Just define the IDs as strings here
-PRIMARY_MODEL_ID = "llama-3.3-70b-versatile"
-BACKUP_MODEL_ID = "llama-3.1-8b-instant"
 
 # Groq API Key (FREE - get from https://console.groq.com)
 # Sign up is free and takes 1 minute!
@@ -257,75 +256,54 @@ def format_context_node(state: GraphState) -> GraphState:
 def generate_answer_node(state: GraphState) -> GraphState:
     """
     Node 3: Answer Generation
-    
-    Generates a grounded answer using Groq's FREE ultra-fast LLM API.
-    
-    CRITICAL GROUNDING RULES:
-    - LLM must ONLY use information from the provided context
-    - If answer is not in context, LLM must explicitly state this
-    - No external knowledge or assumptions allowed
-    - This ensures factual accuracy and prevents hallucinations
-    
-    Why Groq with Llama-3.1-70B?
-    - FREE API with generous rate limits (30 requests/min)
-    - BLAZING FAST: 1-2 second response time (vs 10-20 sec for HuggingFace)
-    - High quality: 70B parameter model rivals GPT-3.5
-    - Reliable: Dedicated infrastructure, no cold starts
-    - Easy setup: Just need a free API key
-    
-    Args:
-        state: Current graph state with question and context
-        
-    Returns:
-        Updated state with generated answer
+    Uses a single, high-performance model (Llama 3.3 70B) via Groq.
     """
     question = state["question"]
     context = state["context"]
     
     if not GROQ_API_KEY:
-        state["answer"] = "⚠️ Groq API key not found."
+        state["answer"] = "⚠️ Groq API key not found. Please add it to your environment."
         return state
 
-    # 1. Create the primary LLM object
-    primary_llm = ChatGroq(
-        model=PRIMARY_MODEL_ID, # Use the string ID
+    # 1. Initialize the single model directly
+    # We use the variable SELECTED_MODEL defined at the top of your script
+    llm = ChatGroq(
+        model=SELECTED_MODEL,
         groq_api_key=GROQ_API_KEY,
-        temperature=0.1,
-        max_tokens=512,
-    )
-    
-    # 2. Create the backup LLM object
-    backup_llm = ChatGroq(
-        model=BACKUP_MODEL_ID, # Use the string ID
-        groq_api_key=GROQ_API_KEY,
-        temperature=0.1,
-        max_tokens=512,
+        temperature=0.1,  # Keep it low for factual RAG responses
+        max_tokens=1024,
     )
 
-    # 3. Combine them with fallbacks
-    llm_chain = primary_llm.with_fallbacks([backup_llm])
+    # 2. Define the Grounding Prompt
+    prompt = f"""You are a helpful assistant answering questions about Agentic AI based STRICTLY on the provided context.
 
-    prompt = f"""You are a helpful assistant answering questions about Agentic AI based STRICTLY on the provided context...
-    CONTEXT: {context}
-    QUESTION: {question}
-    ANSWER:"""
+RULES:
+1. Use ONLY the provided context.
+2. If the answer isn't there, say: "I cannot find this information in the provided eBook content."
+3. Stay concise and professional.
+
+CONTEXT:
+{context}
+
+QUESTION:
+{question}
+
+ANSWER:"""
 
     try:
-        # 4. Invoke the chain (the fallback handles the decommissioning error automatically)
-        response = llm_chain.invoke(prompt)
+        # 3. Call the model (This replaces the old 'llm_chain.invoke' logic)
+        response = llm.invoke(prompt)
         answer = response.content.strip()
         
-        if len(answer) < 10:
+        if len(answer) < 5:
             answer = "I cannot find this information in the provided eBook content."
             
     except Exception as e:
-        answer = f"Unable to generate answer. Error: {str(e)[:100]}"
+        # Handle API errors (like rate limits or invalid keys)
+        answer = f"⚠️ Error generating answer: {str(e)[:100]}"
     
     state["answer"] = answer
     return state
-
-
-
 
 def calculate_confidence_node(state: GraphState) -> GraphState:
     """
@@ -720,14 +698,11 @@ def main():
                     # Display metadata
                     with st.expander("🔍 Technical Details", expanded=False):
                         st.json({
+                            "model_used": SELECTED_MODEL,  # Matches the variable at the top
                             "embedding_model": EMBEDDING_MODEL,
-                            "llm_model": LLM_MODEL,
-                            "llm_provider": "Groq (Ultra-fast)",
-                            "processing_time_seconds": f"{processing_time:.2f}",
-                            "num_chunks_retrieved": result["metadata"]["num_chunks"],
-                            "page_numbers": result["metadata"]["page_numbers"],
-                            "similarity_scores": [f"{s:.4f}" for s in result["metadata"]["similarity_scores"]],
-                            "total_cost": "$0.00 (FREE!)"
+                            "runtime_environment": "Python 3.10",
+                            "llm_provider": "Groq LPU (Ultra-fast)",
+                            "status": "Success"
                         })
                 
                 except Exception as e:
