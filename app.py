@@ -536,7 +536,7 @@ def main():
         - 🔢 **Embeddings**: Sentence Transformers (local)
         - 📊 **Vector DB**: FAISS (local)
         - 🔄 **Workflow**: LangGraph
-        - ✅ **Cost**: $0.00 forever!
+
         
         **Why Groq is Amazing:**
         - 10x faster than alternatives
@@ -549,7 +549,7 @@ def main():
         **First run**: 1-2 min (downloads embeddings)  
         **Per query**: 1-2 seconds! ⚡  
         **Rate limit**: 30 req/min (free tier)  
-        **Cost**: FREE ✅
+ 
         """)
         
         st.header("📝 Sample Queries")
@@ -568,34 +568,6 @@ def main():
                 st.session_state.current_query = query
                 st.rerun()
         
-        st.header("🔧 System Status")
-        if st.session_state.initialized:
-            st.success("✅ Vector store loaded")
-            st.success("✅ RAG graph initialized")
-            st.success("✅ Groq API ready")
-        else:
-            st.warning("⏳ Initializing...")
-        
-        st.header("🔑 Groq Setup")
-        with st.expander("How to get FREE Groq API key"):
-            st.markdown("""
-            **Quick Setup (1 minute):**
-            
-            1. **Sign up**: https://console.groq.com
-            2. **Create API key** in dashboard
-            3. **Add to Streamlit**:
-               - Go to Settings → Secrets
-               - Add:
-               ```toml
-               GROQ_API_KEY = "gsk_..."
-               ```
-            4. **Restart app**
-            
-            **Free Tier Limits:**
-            - 30 requests/minute
-            - 14,400 requests/day
-            - Perfect for demos!
-            """)
     
     # Chat interface
     st.header("💬 Ask a Question")
@@ -657,7 +629,7 @@ def main():
                         confidence_color = "🔴"
                         confidence_label = "Low"
                     
-                    col1, col2, col3 = st.columns(3)
+                    col1, col2 = st.columns(2)
                     with col1:
                         st.metric(
                             label="Confidence Score",
@@ -670,12 +642,7 @@ def main():
                             value=f"{processing_time:.2f}s",
                             help="⚡ Groq is blazing fast!"
                         )
-                    with col3:
-                        st.metric(
-                            label="Cost",
-                            value="$0.00",
-                            help="100% FREE!"
-                        )
+                    
                     
                     # Display retrieved context in an expander
                     with st.expander("📚 View Retrieved Context Chunks", expanded=False):
