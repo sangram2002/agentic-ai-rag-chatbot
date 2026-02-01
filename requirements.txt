@@ -1,23 +1,23 @@
-# Force-pin rich first to prevent upgrades
-rich==13.7.0
+# UI - Strictly keep rich under 14 for Streamlit 1.31
 streamlit==1.31.0
+rich>=10.14.0,<14.0.0
 
-# LangChain - Use these specific versions to avoid dependency "bloat"
-langchain==0.1.16
-langchain-community==0.0.34
-langgraph==0.0.39
-langchain-core==0.1.45
+# Core Logic - Letting pip find the best compatible set
+langchain
+langchain-community
+langgraph
+langchain-core>=0.1.46
 
-# Groq and HTTPX - The 'proxies' fix
+# Groq - Keeping these fixed to solve the 'proxies' error
 langchain-groq==0.1.3
 groq==0.5.0
 httpx==0.27.0
 
-# Embeddings (Must be >= 2.6.0 for langchain-huggingface)
-langchain-huggingface==0.0.1
-sentence-transformers==2.7.0
-faiss-cpu==1.8.0
+# Embeddings & Vector DB
+langchain-huggingface
+sentence-transformers>=2.6.0
+faiss-cpu
 
-# Utils
-pypdf==4.2.0
-python-dotenv==1.0.1
+# Utilities
+pypdf
+python-dotenv
